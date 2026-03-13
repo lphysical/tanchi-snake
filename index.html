@@ -90,16 +90,14 @@ class Hook {
     this.cx = cx; // 钩锚点(centerX)
     this.cy = cy; // 钩锚点(centerY)
     this.length = length;   // 基础长度
-    this.angle = 0;       // 当前角度, 单位° 
+    this.angle = 0;         // 当前角度, 单位° 
     this.minAngle = minA; // -70
     this.maxAngle = maxA; // +70
-    this.state = 'swing'; // swing, extend, retract
-    this.dir = 1;         // 摆动方向(1:右, -1:左）
-    this.extendedX = 0;   // 当前端x/y
-    this.extendedY = 0;
-    this.speed = 6;       // 钩子伸缩速度(像素/帧)
-    this.swingSpeed = 1.1; // 摆动速度(度/帧)
-    this.currentLen = length;
+    this.state = 'swing';   // swing, extend, retract
+    this.dir = 1;           // 摆动方向(1:右, -1:左）
+    this.speed = 6;         // 钩子伸缩速度(像素/帧)
+    this.swingSpeed = 1.1;  // 摆动速度(度/帧)
+    this.currentLen = this.length; // 当前伸出长度
     this.attachedItem = null;
   }
   update(game) {
@@ -117,21 +115,21 @@ class Hook {
     }
     else if(this.state === 'extend') {
       this.currentLen += this.speed;
-      if(this.outOfBounds(game)) {
-        this.state = 'retract';
-      }
       // 与物体碰撞检测
+      let hx = this.cx + this.currentLen*Math.sin(this.angle * Math.PI/180);
+      let hy = this.cy + this.currentLen*Math.cos(this.angle * Math.PI/180);
       for(let item of game.items) {
         if(item.captured) continue;
-        const hx = this.cx + this.currentLen*Math.sin(this.angle * Math.PI/180);
-        const hy = this.cy + this.currentLen*Math.cos(this.angle * Math.PI/180);
         const dist = Math.hypot(hx - item.x, hy - item.y);
         if(dist < item.radius + 16) {
           item.captured = true;
           this.attachedItem = item;
           this.state = 'retract';
-          break;
+          return;
         }
+      }
+      if(this.outOfBounds(game)) {
+        this.state = 'retract';
       }
     }
     else if(this.state === 'retract') {
@@ -219,7 +217,7 @@ class Game {
   resize() {
     // 自适应比例
     const W = window.innerWidth, H = window.innerHeight;
-    const scale = Math.min(W/this.width, H/this.height);
+    const scale = Math.min(W/this.width, H/this.height, 1);
     this.canvas.width = this.width * window.devicePixelRatio;
     this.canvas.height = this.height * window.devicePixelRatio;
     this.canvas.style.width = this.width*scale + "px";
@@ -275,12 +273,21 @@ class Game {
     }, 1000);
   }
   handleInput() {
+    // 修复：keydown 只切换钩子状态为"extend"，不处理其它情况
     window.addEventListener('keydown', (e)=>{
       if(e.code=="Space" && this.state==='playing' && this.hook.state==='swing') {
         this.hook.state = 'extend';
       }
+      // 支持R键重开
       else if(e.code==="KeyR" && this.state!=='playing'){
         location.reload();
+      }
+    });
+    // 修复部分PC空格无效，允许canvas聚焦后空格生效
+    document.body.tabIndex = -1;
+    document.body.addEventListener('keydown', (e)=>{
+      if(e.code=="Space" && this.state==='playing' && this.hook.state==='swing') {
+        this.hook.state = 'extend';
       }
     });
   }
