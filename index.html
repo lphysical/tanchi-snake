@@ -1,405 +1,372 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-cn">
 <head>
   <meta charset="UTF-8">
-  <title>2D 生存射击游戏</title>
+  <title>黄金矿工 - Canvas 版</title>
   <style>
     html, body {
+      width: 100%;
+      height: 100%;
+      background: #634021 linear-gradient(#3A2717 0%, #634021 100%);
       margin: 0;
       padding: 0;
-      background: #20242a;
       overflow: hidden;
       user-select: none;
     }
+    #ui {
+      position: absolute;
+      left: 0; right: 0; top: 10px; width: 100vw;
+      z-index: 2; pointer-events: none;
+      color: #fffdd7;
+      font-family: '微软雅黑', Arial, sans-serif;
+      text-align: center;
+      font-size: 20px;
+      text-shadow: 2px 2px 8px #2e200f, 0 0 3px #d1a072;
+    }
+    #restart-btn {
+      display: none;
+      position: absolute;
+      left:50%; top:55%;
+      transform:translate(-50%,-50%);
+      font-size: 22px;
+      background: #fffbe8;
+      color: #865c1b;
+      border-radius: 8px;
+      border: none;
+      padding: 14px 40px;
+      box-shadow: 0 2px 16px #9d793388;
+      cursor: pointer;
+    }
     canvas {
       display: block;
-      background: #23272f;
       margin: 0 auto;
-    }
-    #info {
-      position: absolute;
-      left: 20px;
-      top: 14px;
-      z-index: 3;
-      color: #ffeaa7;
-      font-family: 'Segoe UI', Arial, sans-serif;
-      font-size: 18px;
-      text-shadow: 1px 2px 6px #333;
-      background: rgba(40,40,44,0.63);
-      border-radius: 8px;
-      padding: 6px 18px 3px 14px;
+      background: none;
+      z-index: 1;
     }
   </style>
 </head>
 <body>
-<canvas id="game"></canvas>
-<div id="info">
-  <span id="score">得分: 0</span>　
-  <span id="survival">存活: 0s</span>
+<div id="ui">
+  <div id="score"></div>
+  <div id="timer"></div>
+  <div id="target"></div>
 </div>
+<button id="restart-btn" onclick="location.reload()">重新开始</button>
+<canvas id="gameCanvas"></canvas>
 <script>
-class Particle {
-  constructor(x, y, color) {
-    this.x = x; this.y = y;
-    this.radius = 2 + Math.random() * 2;
-    this.life = 24 + Math.random() * 14;
-    this.vx = (Math.random() - 0.5) * 2.7;
-    this.vy = (Math.random() - 0.5) * 2.7;
-    this.color = color;
-  }
-  update() {
-    this.x += this.vx;
-    this.y += this.vy;
-    this.life--;
+class Item {
+  // type: "gold_big","gold_small","stone"
+  // emoji: 💰🪙🪨
+  // value: 分数
+  // mass: 质量
+  static CONFIGS = [
+    { type: "gold_big", emoji: "💰", value: 500, mass: 5, radius: 36 },
+    { type: "gold_small", emoji: "🪙", value: 120, mass: 1, radius: 22 },
+    { type: "stone", emoji: "🪨", value: 40, mass: 10, radius: 27 }
+  ];
+  constructor(x, y, config) {
+    this.x = x;
+    this.y = y;
+    this.type = config.type;
+    this.emoji = config.emoji;
+    this.value = config.value;
+    this.mass = config.mass;
+    this.radius = config.radius;
+    this.captured = false;
   }
   draw(ctx) {
     ctx.save();
-    ctx.globalAlpha = Math.max(this.life/30, 0);
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
-    ctx.fillStyle = this.color;
-    ctx.fill();
+    ctx.font = `${this.radius*1.2}px serif`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.globalAlpha = this.captured ? 0.4 : 1;
+    ctx.fillText(this.emoji, this.x, this.y + 3);
     ctx.restore();
   }
 }
 
-class Bullet {
-  constructor(x, y, angle) {
-    this.x = x;
-    this.y = y;
-    this.radius = 7;
-    this.speed = 10.3;
-    this.vx = Math.cos(angle) * this.speed;
-    this.vy = Math.sin(angle) * this.speed;
-    this.alive = true;
+class Hook {
+  constructor(cx, cy, length, minA, maxA) {
+    this.cx = cx; // 钩锚点(centerX)
+    this.cy = cy; // 钩锚点(centerY)
+    this.length = length;   // 基础长度
+    this.angle = 0;       // 当前角度, 单位° 
+    this.minAngle = minA; // -70
+    this.maxAngle = maxA; // +70
+    this.state = 'swing'; // swing, extend, retract
+    this.dir = 1;         // 摆动方向(1:右, -1:左）
+    this.extendedX = 0;   // 当前端x/y
+    this.extendedY = 0;
+    this.speed = 6;       // 钩子伸缩速度(像素/帧)
+    this.swingSpeed = 1.1; // 摆动速度(度/帧)
+    this.currentLen = length;
+    this.attachedItem = null;
   }
-  getAABB() {
-    return {
-      x: this.x - this.radius, y: this.y - this.radius,
-      w: this.radius*2, h: this.radius*2
-    };
-  }
-  update(width, height) {
-    this.x += this.vx;
-    this.y += this.vy;
-    // 出界消失
-    if (this.x < -30 || this.x > width+30 || this.y < -30 || this.y > height+30) {
-      this.alive = false;
+  update(game) {
+    if(this.state === 'swing') {
+      this.angle += this.swingSpeed * this.dir;
+      if(this.angle <= this.minAngle) {
+        this.angle = this.minAngle;
+        this.dir = 1;
+      } else if(this.angle >= this.maxAngle) {
+        this.angle = this.maxAngle;
+        this.dir = -1;
+      }
+      this.currentLen = this.length;
+      this.attachedItem = null;
+    }
+    else if(this.state === 'extend') {
+      this.currentLen += this.speed;
+      if(this.outOfBounds(game)) {
+        this.state = 'retract';
+      }
+      // 与物体碰撞检测
+      for(let item of game.items) {
+        if(item.captured) continue;
+        const hx = this.cx + this.currentLen*Math.sin(this.angle * Math.PI/180);
+        const hy = this.cy + this.currentLen*Math.cos(this.angle * Math.PI/180);
+        const dist = Math.hypot(hx - item.x, hy - item.y);
+        if(dist < item.radius + 16) {
+          item.captured = true;
+          this.attachedItem = item;
+          this.state = 'retract';
+          break;
+        }
+      }
+    }
+    else if(this.state === 'retract') {
+      // 钩空/抓到物体时速度调整
+      let realSpeed = this.speed;
+      if(this.attachedItem)
+        realSpeed = Math.max(2.5, 18 / this.attachedItem.mass); // 质量大,回收慢
+      this.currentLen -= realSpeed;
+      // 拖拽物体位置随钩子
+      if(this.attachedItem) {
+        const x = this.cx + this.currentLen*Math.sin(this.angle*Math.PI/180);
+        const y = this.cy + this.currentLen*Math.cos(this.angle*Math.PI/180);
+        this.attachedItem.x = x;
+        this.attachedItem.y = y;
+      }
+      if(this.currentLen <= this.length) {
+        if(this.attachedItem) {
+          game.score += this.attachedItem.value;
+          this.attachedItem = null;
+        }
+        this.state = 'swing';
+        this.currentLen = this.length;
+      }
     }
   }
-  draw(ctx) {
-    ctx.save();
-    ctx.shadowColor = '#ffe451';
-    ctx.shadowBlur = 14;
-    ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
-    ctx.fillStyle = '#ffe451';
-    ctx.fill();
-    ctx.restore();
-  }
-}
-
-class Enemy {
-  constructor(x, y, player) {
-    this.w = 34 + Math.random()*10;
-    this.h = 34 + Math.random()*10;
-    this.x = x;
-    this.y = y;
-    this.speed = 1.1 + Math.random() * 0.5;
-    this.vx = 0;
-    this.vy = 0;
-    this.setDirectionTo(player.x, player.y);
-    this.hp = 2;
-  }
-  setDirectionTo(tx, ty) {
-    let dx = tx - (this.x+this.w/2);
-    let dy = ty - (this.y+this.h/2);
-    let d = Math.hypot(dx, dy) || 1e-9;
-    this.vx = (dx/d) * this.speed;
-    this.vy = (dy/d) * this.speed;
-  }
-  update(player) {
-    // 动态追踪玩家
-    this.setDirectionTo(player.x, player.y);
-    this.x += this.vx;
-    this.y += this.vy;
-  }
-  getAABB() {
-    return {x:this.x, y:this.y, w:this.w, h:this.h};
+  outOfBounds(game) {
+    const hx = this.cx + this.currentLen*Math.sin(this.angle * Math.PI/180);
+    const hy = this.cy + this.currentLen*Math.cos(this.angle * Math.PI/180);
+    return (
+      hx < 0 || hx > game.width ||
+      hy < this.cy + 6 || hy > game.height
+    );
   }
   draw(ctx) {
+    // 绘制线、钩子
     ctx.save();
-    ctx.shadowColor = 'red';
-    ctx.shadowBlur = 6;
-    ctx.fillStyle = '#e05';
-    ctx.fillRect(this.x, this.y, this.w, this.h);
-    ctx.shadowBlur = 0;
-    // HP bar
-    ctx.fillStyle = '#fff8';
-    ctx.fillRect(this.x, this.y-6, this.w, 4);
-    ctx.fillStyle = '#f44';
-    ctx.fillRect(this.x, this.y-6, this.w * (this.hp/2), 4);
-    ctx.restore();
-  }
-}
-
-class Player {
-  constructor(cx, cy) {
-    this.x = cx;
-    this.y = cy;
-    this.radius = 24;
-    this.alive = true;
-    this.invincible = 0;
-    this.color = '#29a7f9';
-    this.fireCD = 0;
-  }
-  getAABB() {
-    return {
-      x: this.x - this.radius, y: this.y - this.radius,
-      w: this.radius*2, h: this.radius*2
-    };
-  }
-  update() {
-    if (this.invincible > 0) this.invincible--;
-    if (this.fireCD > 0) this.fireCD--;
-  }
-  draw(ctx) {
-    ctx.save();
+    ctx.strokeStyle = "#f0d573";
+    ctx.lineWidth = 4;
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
-    ctx.globalAlpha = this.invincible > 0 ? 0.5 : 1;
-    ctx.shadowColor = "#73e2fb";
-    ctx.shadowBlur = 18;
-    ctx.fillStyle = this.color;
-    ctx.fill();
-    ctx.restore();
-    ctx.save();
-    ctx.lineWidth = 3;
-    ctx.strokeStyle = "#2dd2f7";
+    ctx.moveTo(this.cx, this.cy);
+    const ex = this.cx + this.currentLen * Math.sin(this.angle * Math.PI/180);
+    const ey = this.cy + this.currentLen * Math.cos(this.angle * Math.PI/180);
+    ctx.lineTo(ex, ey);
+    ctx.stroke();
+    // 钩子头
+    ctx.translate(ex, ey);
+    ctx.rotate(-this.angle * Math.PI/180);
     ctx.beginPath();
-    ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI*2);
-    ctx.globalAlpha = 0.16;
+    ctx.strokeStyle = "#af7109";
+    ctx.lineWidth = 7;
+    ctx.arc(0, 13, 15, Math.PI*1.2, Math.PI*1.8, false);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(0, 0, 13, 0, Math.PI, true);
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "#53400d";
     ctx.stroke();
     ctx.restore();
   }
 }
 
-// AABB 碰撞检测
-function isCollide(a, b) {
-  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-}
-
 class Game {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext("2d");
-    this.resize();
-    this.center = {x:canvas.width/2, y:canvas.height/2};
-    this.player = new Player(this.center.x, this.center.y);
-    this.enemies = [];
-    this.bullets = [];
-    this.particles = [];
-    this.lastEnemySpawn = 0;
-    this.enemyInterval = 1200;
-    this.running = true;
+    this.ctx = canvas.getContext('2d');
+    this.width = 820;
+    this.height = 540;
     this.score = 0;
-    this.startTime = Date.now();
-    this.mouse = {x:this.center.x, y:this.center.y};
-    this._bindEvents();
-    this.loop = this.loop.bind(this);
-    requestAnimationFrame(this.loop);
+    this.target = 1200 + Math.floor(Math.random()*200);
+    this.timeLeft = 60;
+    this.state = 'playing'; // 'playing','win','lose'
+    this.hook = new Hook(this.width/2, 80, 68, -70, 70);
+    this.items = [];
+    this.uiScore = document.getElementById('score');
+    this.uiTimer = document.getElementById('timer');
+    this.uiTarget = document.getElementById('target');
+    this.restartBtn = document.getElementById('restart-btn');
+    this.initItems();
+    this._timerHandle = null;
+    this._intervalHandle = null;
+    this.initUI();
+    this.start();
+    this.handleInput();
   }
   resize() {
-    // 横屏
-    this.canvas.width = Math.min(window.innerWidth, 800);
-    this.canvas.height = Math.min(window.innerHeight, 550);
+    // 自适应比例
+    const W = window.innerWidth, H = window.innerHeight;
+    const scale = Math.min(W/this.width, H/this.height);
+    this.canvas.width = this.width * window.devicePixelRatio;
+    this.canvas.height = this.height * window.devicePixelRatio;
+    this.canvas.style.width = this.width*scale + "px";
+    this.canvas.style.height = this.height*scale + "px";
+    this.ctx.setTransform(window.devicePixelRatio,0,0,window.devicePixelRatio,0,0);
   }
-  _bindEvents() {
-    window.addEventListener("resize", () => {this.resize();});
-    this.canvas.addEventListener('mousemove', e=>{
-      const rect = this.canvas.getBoundingClientRect();
-      this.mouse.x = (e.clientX-rect.left) * (this.canvas.width/rect.width);
-      this.mouse.y = (e.clientY-rect.top) * (this.canvas.height/rect.height);
-    });
-    this.canvas.addEventListener('mousedown', e=>{
-      if (!this.running) return;
-      this.shoot();
-    });
-    // 触屏支持
-    this.canvas.addEventListener('touchstart', e=>{
-      if (!this.running) return;
-      const rect = this.canvas.getBoundingClientRect();
-      let t = e.touches[0];
-      this.mouse.x = (t.clientX-rect.left) * (this.canvas.width/rect.width);
-      this.mouse.y = (t.clientY-rect.top) * (this.canvas.height/rect.height);
-      this.shoot();
-    });
-  }
-  shoot() {
-    if (this.player.fireCD>0 || !this.player.alive) return;
-    let angle = Math.atan2(this.mouse.y - this.player.y, this.mouse.x - this.player.x);
-    this.bullets.push(new Bullet(
-      this.player.x + Math.cos(angle)*this.player.radius, 
-      this.player.y + Math.sin(angle)*this.player.radius,
-      angle));
-    this.player.fireCD = 12;
-    // 枪口粒子
-    for(let i=0;i<3;i++) {
-      this.particles.push(new Particle(
-        this.player.x + Math.cos(angle)*this.player.radius, 
-        this.player.y + Math.sin(angle)*this.player.radius,
-        '#ffe451'
-      ));
+  initItems() {
+    // 矿物不重叠
+    let tryTimes = 0;
+    let items = [];
+    const NUM = 10 + Math.floor(Math.random()*6);
+    while(items.length < NUM && tryTimes<1000) {
+      tryTimes++;
+      // 1/3大金, 2/3小金, 1/3石头
+      let confId = Math.random();
+      let c;
+      if(confId < 0.18) c = Item.CONFIGS[0];
+      else if(confId < 0.62) c = Item.CONFIGS[1];
+      else c = Item.CONFIGS[2];
+      let r = c.radius;
+      let x = 80 + Math.random()*(this.width-160);
+      let y = 200 + Math.random()*(this.height-180);
+      let item = new Item(x,y,c);
+      // 不重叠判断
+      let ok=true;
+      for(let other of items) {
+        if(Math.hypot(item.x-other.x, item.y-other.y) <= item.radius+other.radius+12)
+          ok = false;
+      }
+      if(ok) items.push(item);
     }
+    this.items = items;
   }
-  spawnEnemy() {
-    // 从随机边缘生成
-    let W = this.canvas.width, H = this.canvas.height, side = Math.floor(Math.random()*4);
-    let x, y;
-    switch (side) {
-      case 0: // top
-        x = Math.random()*(W-40); y = -40; break;
-      case 1: // right
-        x = W+40; y = Math.random()*(H-40); break;
-      case 2: // bottom
-        x = Math.random()*(W-40); y = H+40; break;
-      case 3: // left
-        x = -40; y = Math.random()*(H-40); break;
-    }
-    this.enemies.push(new Enemy(x, y, this.player));
+  initUI() {
+    this.uiScore.innerHTML = `得分：<b>${this.score}</b>`;
+    this.uiTarget.innerHTML = `目标：${this.target}`;
+    this.uiTimer.innerHTML = `剩余时间：<b>${this.timeLeft}</b> 秒`;
+    this.restartBtn.style.display = "none";
+  }
+  start() {
+    this.resize();
+    window.addEventListener('resize', ()=>this.resize());
+    clearInterval(this._intervalHandle);
+    this._intervalHandle = setInterval(()=>this.loop(),1000/60);
+    clearInterval(this._timerHandle);
+    this._timerHandle = setInterval(()=>{
+      if(this.state!=='playing') return;
+      if(--this.timeLeft<=0) {
+        this.timeLeft = 0;
+        this.end();
+      }
+      this.uiTimer.innerHTML = `剩余时间：<b>${this.timeLeft}</b> 秒`;
+    }, 1000);
+  }
+  handleInput() {
+    window.addEventListener('keydown', (e)=>{
+      if(e.code=="Space" && this.state==='playing' && this.hook.state==='swing') {
+        this.hook.state = 'extend';
+      }
+      else if(e.code==="KeyR" && this.state!=='playing'){
+        location.reload();
+      }
+    });
+  }
+  end() {
+    this.state = (this.score >= this.target) ? "win" : "lose";
+    clearInterval(this._intervalHandle);
+    clearInterval(this._timerHandle);
+    setTimeout(()=>{
+      this.restartBtn.style.display="block";
+      this.restartBtn.innerText = (this.state==='win'?'🎉通过，':'未完成，')+'再试一次(R)';
+    },350);
   }
   drawBackground() {
-    // 绘制深色网格
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.fillStyle = "#23272f";
-    ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
-    ctx.strokeStyle = "#2e323a";
-    ctx.lineWidth = 1.1;
-    for(let x=0; x<=this.canvas.width; x+=32) {
-      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,this.canvas.height); ctx.stroke();
-    }
-    for(let y=0; y<=this.canvas.height; y+=32) {
-      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(this.canvas.width,y); ctx.stroke();
-    }
-    ctx.restore();
-  }
-  update() {
-    if (!this.player.alive) return;
-    let now = Date.now();
-    // 敌人生成
-    if (now - this.lastEnemySpawn > this.enemyInterval) {
-      this.lastEnemySpawn = now;
-      this.spawnEnemy();
-      // 敌人越来越频繁
-      this.enemyInterval = Math.max(370, this.enemyInterval-10);
-    }
-    // 更新
-    this.player.update();
-    this.enemies.forEach(e=>e.update(this.player));
-    this.bullets.forEach(b=>b.update(this.canvas.width, this.canvas.height));
-    this.particles.forEach(p=>p.update());
-    // 碰撞检测
-    for (let i = this.enemies.length-1; i>=0; i--) {
-      let enemy = this.enemies[i];
-      // 与子弹
-      for(let j=this.bullets.length-1;j>=0;j--) {
-        let bullet = this.bullets[j];
-        if (!bullet.alive) continue;
-        if (isCollide(enemy.getAABB(), bullet.getAABB())) {
-          enemy.hp--;
-          bullet.alive = false;
-          this.score += 10;
-          // 爆粒子
-          for(let k=0;k<10;k++) {
-            this.particles.push(new Particle(
-              bullet.x, bullet.y,
-              '#ffbb44'
-            ));
-          }
-        }
-      }
-      // 删除死敌人
-      if (enemy.hp<=0) {
-        for(let k=0;k<10;k++) this.particles.push(new Particle(
-          enemy.x+enemy.w/2, enemy.y+enemy.h/2,
-          '#f44336'
-        ));
-        this.enemies.splice(i,1);
-        continue;
-      }
-      // 敌人撞玩家
-      if (this.player.invincible<=0 && isCollide(this.player.getAABB(), enemy.getAABB())) {
-        this.player.invincible = 40;
-        this.player.alive = false;
-        setTimeout(()=>{
-          this.running = false;
-          this.gameOver();
-        },300);
-      }
-    }
-    // 删无效
-    this.bullets = this.bullets.filter(b=>b.alive);
-    this.particles = this.particles.filter(p=>p.life>0);
-  }
-  draw() {
-    this.drawBackground();
-    this.particles.forEach(p=>p.draw(this.ctx));
-    this.player.draw(this.ctx);
-    this.bullets.forEach(b=>b.draw(this.ctx));
-    this.enemies.forEach(e=>e.draw(this.ctx));
-    // 鼠标瞄准点
-    if (this.running) {
-      this.ctx.save();
+    // 深褐色渐变
+    let g = this.ctx.createLinearGradient(0,0,0,this.height);
+    g.addColorStop(0,"#3a2717");
+    g.addColorStop(1,"#634021");
+    this.ctx.fillStyle = g;
+    this.ctx.fillRect(0, 0, this.width, this.height);
+
+    // 网格
+    this.ctx.save();
+    this.ctx.globalAlpha = 0.13;
+    this.ctx.strokeStyle = "#fff8e2";
+    this.ctx.lineWidth = 1;
+    for (let x = 60; x < this.width; x += 48) {
       this.ctx.beginPath();
-      this.ctx.arc(this.mouse.x, this.mouse.y, 12, 0, Math.PI*2);
-      this.ctx.strokeStyle = '#fff381';
-      this.ctx.lineWidth = 2;
-      this.ctx.globalAlpha = 0.7;
+      this.ctx.moveTo(x,150);
+      this.ctx.lineTo(x,this.height-4);
       this.ctx.stroke();
+    }
+    for (let y = 180; y < this.height; y += 40) {
+      this.ctx.beginPath();
+      this.ctx.moveTo(12,y);
+      this.ctx.lineTo(this.width-12, y);
+      this.ctx.stroke();
+    }
+    this.ctx.restore();
+  }
+  drawMiner() {
+    this.ctx.save();
+    this.ctx.font = '48px serif';
+    this.ctx.textAlign = 'center';
+    this.ctx.textBaseline = 'middle';
+    this.ctx.fillText('🤠', this.width/2, 54);
+    this.ctx.restore();
+  }
+  loop() {
+    // draw
+    this.drawBackground();
+    for(let i of this.items) i.draw(this.ctx);
+    this.drawMiner();
+    this.hook.update(this);
+    this.hook.draw(this.ctx);
+
+    // UI
+    this.uiScore.innerHTML = `得分：<b>${this.score}</b>`;
+    if(this.state==='win'){
+      this.ctx.save();
+      this.ctx.font = "50px '微软雅黑',serif";
+      this.ctx.fillStyle = "#ffffe5";
+      this.ctx.strokeStyle="#865c1b";
+      this.ctx.lineWidth=5;
+      this.ctx.textAlign='center';
+      this.ctx.textBaseline='middle';
+      this.ctx.strokeText('🎉 恭喜通过目标!', this.width/2,this.height/2-30);
+      this.ctx.fillText('🎉 恭喜通过目标!', this.width/2,this.height/2-30);
+      this.ctx.restore();
+    } else if(this.state==='lose'){
+      this.ctx.save();
+      this.ctx.font = "50px '微软雅黑',serif";
+      this.ctx.fillStyle = "#fff";
+      this.ctx.strokeStyle="#552";
+      this.ctx.lineWidth=6;
+      this.ctx.textAlign='center';
+      this.ctx.textBaseline='middle';
+      this.ctx.strokeText('未达标，再来一次！', this.width/2,this.height/2-30);
+      this.ctx.fillText('未达标，再来一次！', this.width/2,this.height/2-30);
       this.ctx.restore();
     }
   }
-  loop() {
-    this.update();
-    this.draw();
-    // UI
-    let scoreDOM = document.getElementById('score');
-    let survivalDOM = document.getElementById('survival');
-    let time = Math.floor((Date.now()-this.startTime)/1000);
-    scoreDOM.textContent = "得分: "+this.score;
-    survivalDOM.textContent = "存活: "+time+"s";
-    if (this.running) requestAnimationFrame(this.loop);
-  }
-  gameOver() {
-    // 居中显示Game Over
-    let ctx = this.ctx;
-    ctx.save();
-    ctx.fillStyle = "rgba(36,22,15,0.92)";
-    ctx.fillRect(0,this.canvas.height/2-70,this.canvas.width,120);
-    ctx.font = "bold 40px 'Segoe UI',Arial";
-    ctx.textAlign = "center";
-    ctx.fillStyle = "#ffe451";
-    ctx.shadowColor = "#4b4150";
-    ctx.shadowBlur = 8;
-    ctx.fillText("游戏结束", this.canvas.width/2, this.canvas.height/2);
-    ctx.font = "bold 22px 'Segoe UI',Arial";
-    ctx.shadowBlur=0;
-    ctx.fillStyle = "#fffbb7";
-    ctx.fillText(
-      `得分: ${this.score}　存活: ${Math.floor((Date.now()-this.startTime)/1000)} 秒`,
-      this.canvas.width/2, this.canvas.height/2+44);
-    ctx.font = "18px 'Segoe UI',Arial";
-    ctx.fillStyle = "#b2ddf7";
-    ctx.fillText("刷新页面重新再来！", this.canvas.width/2, this.canvas.height/2 + 75);
-    ctx.restore();
-  }
 }
 
-window.onload = function() {
-  let canvas = document.getElementById('game');
-  let game = new Game(canvas);
-};
+const canvas = document.getElementById('gameCanvas');
+let game = new Game(canvas);
+window.game = game;
+
 </script>
-</body>
-</html>
+<!-- By Cursor AI, followup prompt: 黄金矿工 -->
