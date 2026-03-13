@@ -1,258 +1,405 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>贪吃蛇游戏</title>
-    <style>
-        body {
-            background: #222;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            height: 100vh;
-            margin: 0;
-        }
-        #game-container {
-            background: #fff;
-            border-radius: 12px;
-            box-shadow: 0 8px 32px rgba(0,0,0,0.13);
-            padding: 24px 38px 28px 38px;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-        }
-        #game-title {
-            font-size: 2.2em;
-            color: #1976d2;
-            margin-bottom: 10px;
-            font-weight: bold;
-            letter-spacing: 3px;
-        }
-        #score {
-            font-size: 1.3em;
-            margin: 0 0 16px 0;
-            color: #444;
-        }
-        #game-canvas {
-            background: #fafafa;
-            border: 2px solid #1976d2;
-            border-radius: 9px;
-            display: block;
-            margin-bottom: 14px;
-        }
-        .btn {
-            padding: 7px 24px;
-            border: none;
-            border-radius: 5px;
-            background: #1976d2;
-            color: #fff;
-            font-size: 1.1em;
-            cursor: pointer;
-            transition: background 0.2s;
-        }
-        .btn:hover {
-            background: #125db4;
-        }
-        #tip {
-            color: #666;
-            font-size: 0.97em;
-            margin-top: 8px;
-            margin-bottom: 4px;
-        }
-    </style>
+  <meta charset="UTF-8">
+  <title>2D 生存射击游戏</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: #20242a;
+      overflow: hidden;
+      user-select: none;
+    }
+    canvas {
+      display: block;
+      background: #23272f;
+      margin: 0 auto;
+    }
+    #info {
+      position: absolute;
+      left: 20px;
+      top: 14px;
+      z-index: 3;
+      color: #ffeaa7;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 18px;
+      text-shadow: 1px 2px 6px #333;
+      background: rgba(40,40,44,0.63);
+      border-radius: 8px;
+      padding: 6px 18px 3px 14px;
+    }
+  </style>
 </head>
 <body>
-    <div id="game-container">
-        <div id="game-title">贪吃蛇游戏</div>
-        <div id="score">分数：0</div>
-        <canvas id="game-canvas" width="400" height="400" tabindex="0"></canvas>
-        <button class="btn" id="restart-btn" style="display:none;">重新开始</button>
-        <div id="tip">用 <strong>↑ ↓ ← →</strong> 或 <strong>WASD</strong> 操作</div>
-    </div>
-    <script>
-        const canvas = document.getElementById('game-canvas');
-        const ctx = canvas.getContext('2d');
-        const scoreEl = document.getElementById('score');
-        const restartBtn = document.getElementById('restart-btn');
+<canvas id="game"></canvas>
+<div id="info">
+  <span id="score">得分: 0</span>　
+  <span id="survival">存活: 0s</span>
+</div>
+<script>
+class Particle {
+  constructor(x, y, color) {
+    this.x = x; this.y = y;
+    this.radius = 2 + Math.random() * 2;
+    this.life = 24 + Math.random() * 14;
+    this.vx = (Math.random() - 0.5) * 2.7;
+    this.vy = (Math.random() - 0.5) * 2.7;
+    this.color = color;
+  }
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.life--;
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.globalAlpha = Math.max(this.life/30, 0);
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+    ctx.fillStyle = this.color;
+    ctx.fill();
+    ctx.restore();
+  }
+}
 
-        // 游戏参数
-        const gridSize = 20;         // 单元格大小
-        const cellCount = 20;        // 网格数量（20x20）
-        const speedInit = 150;       // 初始速度（ms一帧）
+class Bullet {
+  constructor(x, y, angle) {
+    this.x = x;
+    this.y = y;
+    this.radius = 7;
+    this.speed = 10.3;
+    this.vx = Math.cos(angle) * this.speed;
+    this.vy = Math.sin(angle) * this.speed;
+    this.alive = true;
+  }
+  getAABB() {
+    return {
+      x: this.x - this.radius, y: this.y - this.radius,
+      w: this.radius*2, h: this.radius*2
+    };
+  }
+  update(width, height) {
+    this.x += this.vx;
+    this.y += this.vy;
+    // 出界消失
+    if (this.x < -30 || this.x > width+30 || this.y < -30 || this.y > height+30) {
+      this.alive = false;
+    }
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.shadowColor = '#ffe451';
+    ctx.shadowBlur = 14;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+    ctx.fillStyle = '#ffe451';
+    ctx.fill();
+    ctx.restore();
+  }
+}
 
-        // 游戏状态
-        let snake, direction, nextDir, food, score, timer, speed, dead;
+class Enemy {
+  constructor(x, y, player) {
+    this.w = 34 + Math.random()*10;
+    this.h = 34 + Math.random()*10;
+    this.x = x;
+    this.y = y;
+    this.speed = 1.1 + Math.random() * 0.5;
+    this.vx = 0;
+    this.vy = 0;
+    this.setDirectionTo(player.x, player.y);
+    this.hp = 2;
+  }
+  setDirectionTo(tx, ty) {
+    let dx = tx - (this.x+this.w/2);
+    let dy = ty - (this.y+this.h/2);
+    let d = Math.hypot(dx, dy) || 1e-9;
+    this.vx = (dx/d) * this.speed;
+    this.vy = (dy/d) * this.speed;
+  }
+  update(player) {
+    // 动态追踪玩家
+    this.setDirectionTo(player.x, player.y);
+    this.x += this.vx;
+    this.y += this.vy;
+  }
+  getAABB() {
+    return {x:this.x, y:this.y, w:this.w, h:this.h};
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.shadowColor = 'red';
+    ctx.shadowBlur = 6;
+    ctx.fillStyle = '#e05';
+    ctx.fillRect(this.x, this.y, this.w, this.h);
+    ctx.shadowBlur = 0;
+    // HP bar
+    ctx.fillStyle = '#fff8';
+    ctx.fillRect(this.x, this.y-6, this.w, 4);
+    ctx.fillStyle = '#f44';
+    ctx.fillRect(this.x, this.y-6, this.w * (this.hp/2), 4);
+    ctx.restore();
+  }
+}
 
-        // 初始化游戏
-        function init() {
-            snake = [
-                { x: 9, y: 10 },
-                { x: 8, y: 10 },
-                { x: 7, y: 10 }
-            ];
-            direction = { x: 1, y: 0 }; // 向右
-            nextDir = direction;
-            score = 0;
-            speed = speedInit;
-            dead = false;
-            placeFood();
-            updateScore();
-            restartBtn.style.display = 'none';
-            canvas.focus();
-            if (timer) clearInterval(timer);
-            timer = setInterval(gameLoop, speed);
-            draw();
+class Player {
+  constructor(cx, cy) {
+    this.x = cx;
+    this.y = cy;
+    this.radius = 24;
+    this.alive = true;
+    this.invincible = 0;
+    this.color = '#29a7f9';
+    this.fireCD = 0;
+  }
+  getAABB() {
+    return {
+      x: this.x - this.radius, y: this.y - this.radius,
+      w: this.radius*2, h: this.radius*2
+    };
+  }
+  update() {
+    if (this.invincible > 0) this.invincible--;
+    if (this.fireCD > 0) this.fireCD--;
+  }
+  draw(ctx) {
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI*2);
+    ctx.globalAlpha = this.invincible > 0 ? 0.5 : 1;
+    ctx.shadowColor = "#73e2fb";
+    ctx.shadowBlur = 18;
+    ctx.fillStyle = this.color;
+    ctx.fill();
+    ctx.restore();
+    ctx.save();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = "#2dd2f7";
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius + 5, 0, Math.PI*2);
+    ctx.globalAlpha = 0.16;
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// AABB 碰撞检测
+function isCollide(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+class Game {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.resize();
+    this.center = {x:canvas.width/2, y:canvas.height/2};
+    this.player = new Player(this.center.x, this.center.y);
+    this.enemies = [];
+    this.bullets = [];
+    this.particles = [];
+    this.lastEnemySpawn = 0;
+    this.enemyInterval = 1200;
+    this.running = true;
+    this.score = 0;
+    this.startTime = Date.now();
+    this.mouse = {x:this.center.x, y:this.center.y};
+    this._bindEvents();
+    this.loop = this.loop.bind(this);
+    requestAnimationFrame(this.loop);
+  }
+  resize() {
+    // 横屏
+    this.canvas.width = Math.min(window.innerWidth, 800);
+    this.canvas.height = Math.min(window.innerHeight, 550);
+  }
+  _bindEvents() {
+    window.addEventListener("resize", () => {this.resize();});
+    this.canvas.addEventListener('mousemove', e=>{
+      const rect = this.canvas.getBoundingClientRect();
+      this.mouse.x = (e.clientX-rect.left) * (this.canvas.width/rect.width);
+      this.mouse.y = (e.clientY-rect.top) * (this.canvas.height/rect.height);
+    });
+    this.canvas.addEventListener('mousedown', e=>{
+      if (!this.running) return;
+      this.shoot();
+    });
+    // 触屏支持
+    this.canvas.addEventListener('touchstart', e=>{
+      if (!this.running) return;
+      const rect = this.canvas.getBoundingClientRect();
+      let t = e.touches[0];
+      this.mouse.x = (t.clientX-rect.left) * (this.canvas.width/rect.width);
+      this.mouse.y = (t.clientY-rect.top) * (this.canvas.height/rect.height);
+      this.shoot();
+    });
+  }
+  shoot() {
+    if (this.player.fireCD>0 || !this.player.alive) return;
+    let angle = Math.atan2(this.mouse.y - this.player.y, this.mouse.x - this.player.x);
+    this.bullets.push(new Bullet(
+      this.player.x + Math.cos(angle)*this.player.radius, 
+      this.player.y + Math.sin(angle)*this.player.radius,
+      angle));
+    this.player.fireCD = 12;
+    // 枪口粒子
+    for(let i=0;i<3;i++) {
+      this.particles.push(new Particle(
+        this.player.x + Math.cos(angle)*this.player.radius, 
+        this.player.y + Math.sin(angle)*this.player.radius,
+        '#ffe451'
+      ));
+    }
+  }
+  spawnEnemy() {
+    // 从随机边缘生成
+    let W = this.canvas.width, H = this.canvas.height, side = Math.floor(Math.random()*4);
+    let x, y;
+    switch (side) {
+      case 0: // top
+        x = Math.random()*(W-40); y = -40; break;
+      case 1: // right
+        x = W+40; y = Math.random()*(H-40); break;
+      case 2: // bottom
+        x = Math.random()*(W-40); y = H+40; break;
+      case 3: // left
+        x = -40; y = Math.random()*(H-40); break;
+    }
+    this.enemies.push(new Enemy(x, y, this.player));
+  }
+  drawBackground() {
+    // 绘制深色网格
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = "#23272f";
+    ctx.fillRect(0,0,this.canvas.width,this.canvas.height);
+    ctx.strokeStyle = "#2e323a";
+    ctx.lineWidth = 1.1;
+    for(let x=0; x<=this.canvas.width; x+=32) {
+      ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,this.canvas.height); ctx.stroke();
+    }
+    for(let y=0; y<=this.canvas.height; y+=32) {
+      ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(this.canvas.width,y); ctx.stroke();
+    }
+    ctx.restore();
+  }
+  update() {
+    if (!this.player.alive) return;
+    let now = Date.now();
+    // 敌人生成
+    if (now - this.lastEnemySpawn > this.enemyInterval) {
+      this.lastEnemySpawn = now;
+      this.spawnEnemy();
+      // 敌人越来越频繁
+      this.enemyInterval = Math.max(370, this.enemyInterval-10);
+    }
+    // 更新
+    this.player.update();
+    this.enemies.forEach(e=>e.update(this.player));
+    this.bullets.forEach(b=>b.update(this.canvas.width, this.canvas.height));
+    this.particles.forEach(p=>p.update());
+    // 碰撞检测
+    for (let i = this.enemies.length-1; i>=0; i--) {
+      let enemy = this.enemies[i];
+      // 与子弹
+      for(let j=this.bullets.length-1;j>=0;j--) {
+        let bullet = this.bullets[j];
+        if (!bullet.alive) continue;
+        if (isCollide(enemy.getAABB(), bullet.getAABB())) {
+          enemy.hp--;
+          bullet.alive = false;
+          this.score += 10;
+          // 爆粒子
+          for(let k=0;k<10;k++) {
+            this.particles.push(new Particle(
+              bullet.x, bullet.y,
+              '#ffbb44'
+            ));
+          }
         }
+      }
+      // 删除死敌人
+      if (enemy.hp<=0) {
+        for(let k=0;k<10;k++) this.particles.push(new Particle(
+          enemy.x+enemy.w/2, enemy.y+enemy.h/2,
+          '#f44336'
+        ));
+        this.enemies.splice(i,1);
+        continue;
+      }
+      // 敌人撞玩家
+      if (this.player.invincible<=0 && isCollide(this.player.getAABB(), enemy.getAABB())) {
+        this.player.invincible = 40;
+        this.player.alive = false;
+        setTimeout(()=>{
+          this.running = false;
+          this.gameOver();
+        },300);
+      }
+    }
+    // 删无效
+    this.bullets = this.bullets.filter(b=>b.alive);
+    this.particles = this.particles.filter(p=>p.life>0);
+  }
+  draw() {
+    this.drawBackground();
+    this.particles.forEach(p=>p.draw(this.ctx));
+    this.player.draw(this.ctx);
+    this.bullets.forEach(b=>b.draw(this.ctx));
+    this.enemies.forEach(e=>e.draw(this.ctx));
+    // 鼠标瞄准点
+    if (this.running) {
+      this.ctx.save();
+      this.ctx.beginPath();
+      this.ctx.arc(this.mouse.x, this.mouse.y, 12, 0, Math.PI*2);
+      this.ctx.strokeStyle = '#fff381';
+      this.ctx.lineWidth = 2;
+      this.ctx.globalAlpha = 0.7;
+      this.ctx.stroke();
+      this.ctx.restore();
+    }
+  }
+  loop() {
+    this.update();
+    this.draw();
+    // UI
+    let scoreDOM = document.getElementById('score');
+    let survivalDOM = document.getElementById('survival');
+    let time = Math.floor((Date.now()-this.startTime)/1000);
+    scoreDOM.textContent = "得分: "+this.score;
+    survivalDOM.textContent = "存活: "+time+"s";
+    if (this.running) requestAnimationFrame(this.loop);
+  }
+  gameOver() {
+    // 居中显示Game Over
+    let ctx = this.ctx;
+    ctx.save();
+    ctx.fillStyle = "rgba(36,22,15,0.92)";
+    ctx.fillRect(0,this.canvas.height/2-70,this.canvas.width,120);
+    ctx.font = "bold 40px 'Segoe UI',Arial";
+    ctx.textAlign = "center";
+    ctx.fillStyle = "#ffe451";
+    ctx.shadowColor = "#4b4150";
+    ctx.shadowBlur = 8;
+    ctx.fillText("游戏结束", this.canvas.width/2, this.canvas.height/2);
+    ctx.font = "bold 22px 'Segoe UI',Arial";
+    ctx.shadowBlur=0;
+    ctx.fillStyle = "#fffbb7";
+    ctx.fillText(
+      `得分: ${this.score}　存活: ${Math.floor((Date.now()-this.startTime)/1000)} 秒`,
+      this.canvas.width/2, this.canvas.height/2+44);
+    ctx.font = "18px 'Segoe UI',Arial";
+    ctx.fillStyle = "#b2ddf7";
+    ctx.fillText("刷新页面重新再来！", this.canvas.width/2, this.canvas.height/2 + 75);
+    ctx.restore();
+  }
+}
 
-        // 随机放置食物，不与蛇身体重叠
-        function placeFood() {
-            do {
-                food = {
-                    x: Math.floor(Math.random() * cellCount),
-                    y: Math.floor(Math.random() * cellCount)
-                };
-            } while (snake.some(seg => seg.x === food.x && seg.y === food.y));
-        }
-
-        // 主循环
-        function gameLoop() {
-            if (dead) return;
-            direction = nextDir;
-
-            const newHead = {
-                x: snake[0].x + direction.x,
-                y: snake[0].y + direction.y
-            };
-
-            // 撞墙判定
-            if (newHead.x < 0 || newHead.y < 0 || newHead.x >= cellCount || newHead.y >= cellCount) {
-                gameOver();
-                return;
-            }
-            // 撞自己判定
-            if (snake.some(seg => seg.x === newHead.x && seg.y === newHead.y)) {
-                gameOver();
-                return;
-            }
-
-            snake.unshift(newHead);
-
-            // 吃到食物
-            if (newHead.x === food.x && newHead.y === food.y) {
-                score++;
-                if (score % 5 === 0 && speed > 60) { // 每5分加速
-                    speed -= 15;
-                    clearInterval(timer);
-                    timer = setInterval(gameLoop, speed);
-                }
-                placeFood();
-                updateScore();
-            } else {
-                snake.pop(); // 没吃到食物就移动
-            }
-
-            draw();
-        }
-
-        // 更新分数
-        function updateScore() {
-            scoreEl.textContent = '分数：' + score;
-        }
-
-        // 绘制游戏
-        function draw() {
-            // 清空
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // 绘制蛇
-            for (let i = 0; i < snake.length; i++) {
-                ctx.fillStyle = i === 0 ? "#2DCE89" : "#1976d2";
-                ctx.fillRect(snake[i].x * gridSize, snake[i].y * gridSize, gridSize, gridSize);
-                ctx.strokeStyle = "#fff";
-                ctx.lineWidth = 2;
-                ctx.strokeRect(snake[i].x * gridSize, snake[i].y * gridSize, gridSize, gridSize);
-            }
-
-            // 绘制食物
-            ctx.fillStyle = "#FF5252";
-            ctx.beginPath();
-            ctx.arc(food.x * gridSize + gridSize/2, food.y * gridSize + gridSize/2, gridSize/2 - 2, 0, Math.PI*2);
-            ctx.fill();
-            ctx.strokeStyle = "#fff";
-            ctx.lineWidth = 1.7;
-            ctx.stroke();
-        }
-
-        // 游戏结束
-        function gameOver() {
-            dead = true;
-            clearInterval(timer);
-            ctx.fillStyle = "rgba(30,30,30,0.74)";
-            ctx.fillRect(0, canvas.height/2-40, canvas.width, 60);
-            ctx.fillStyle = "#fff";
-            ctx.font = "bold 28px Arial";
-            ctx.textAlign = "center";
-            ctx.fillText("游戏结束!", canvas.width/2, canvas.height/2-5);
-            ctx.font = "18px Arial";
-            ctx.fillText("分数：" + score, canvas.width/2, canvas.height/2+22);
-            restartBtn.style.display = 'inline-block';
-        }
-
-        // 控制移动，不允许直接反向
-        document.addEventListener('keydown', function(e) {
-            let moved = false;
-            switch (e.key) {
-                case "ArrowUp":
-                case "w":
-                case "W":
-                    if (direction.y !== 1) {
-                        nextDir = {x:0, y:-1};
-                        moved = true;
-                    }
-                    break;
-                case "ArrowDown":
-                case "s":
-                case "S":
-                    if (direction.y !== -1) {
-                        nextDir = {x:0, y:1};
-                        moved = true;
-                    }
-                    break;
-                case "ArrowLeft":
-                case "a":
-                case "A":
-                    if (direction.x !== 1) {
-                        nextDir = {x:-1, y:0};
-                        moved = true;
-                    }
-                    break;
-                case "ArrowRight":
-                case "d":
-                case "D":
-                    if (direction.x !== -1) {
-                        nextDir = {x:1, y:0};
-                        moved = true;
-                    }
-                    break;
-                default:
-                    break;
-            }
-            if (moved) e.preventDefault();
-        });
-
-        // 重新开始
-        restartBtn.onclick = init;
-
-        // PC端自动聚焦
-        window.onload = function() {
-            init();
-            canvas.focus();
-        }
-        
-        // canvas可键盘操作
-        canvas.onblur = () => { canvas.style.outline = "2px solid #FD9106"; };
-        canvas.onfocus = () => { canvas.style.outline = "none"; };
-        canvas.setAttribute("tabindex", "0");
-    </script>
+window.onload = function() {
+  let canvas = document.getElementById('game');
+  let game = new Game(canvas);
+};
+</script>
 </body>
 </html>
